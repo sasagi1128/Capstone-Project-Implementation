@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Scatter vs Parallel Coordinates (Sleep / Stress / GPA)</title>
+  <!-- D3 from CDN (no download needed) -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 18px; }
+    .row { display:flex; gap:12px; align-items:center; flex-wrap: wrap; }
+    button { padding: 8px 12px; font-weight: 700; cursor: pointer; }
+    .active { outline: 3px solid #2b6; }
+    #msg { margin: 10px 0 6px; color:#075; font-weight:700; }
+    #counts { margin: 0 0 12px; color:#333; }
+    svg { border: 1px solid #ddd; background: #fff; }
+    .axis text { font-size: 12px; }
+    .axis path, .axis line { stroke: #999; }
+    .pc-line { fill: none; stroke: #000; stroke-opacity: 0.06; }
+    .pc-line:hover { stroke-opacity: 0.6; stroke-width: 2.2; }
+  </style>
+</head>
+
+<body>
+  <h1 style="margin:0 0 8px;">Two Conditions: Scatter vs Parallel Coordinates</h1>
+
+  <div class="row">
+    <button id="btnScatter" class="active">Show Scatter</button>
+    <button id="btnParallel">Show Parallel Coordinates</button>
+
+    <span style="font-weight:700;">Rows used:</span>
+    <select id="sample">
+      <option value="200">200</option>
+      <option value="400" selected>400</option>
+      <option value="800">800</option>
+      <option value="all">All</option>
+    </select>
+  </div>
+
+  <div id="msg"></div>
+  <div id="counts"></div>
+
+  <svg id="viz" width="1100" height="650"></svg>
+
+<script>
+/* =========================
+   CONFIG (edit if needed)
+========================= */
+const CSV_PATH = "data/student_lifestyle_dataset.csv";
+
+// Candidate column names (in case Kaggle headers differ)
+const SLEEP_CANDS  = ["Sleep_Hours_Per_Day", "Sleep Hours Per Day", "Sleep"];
+const STRESS_CANDS = ["Stress_Level", "Stress Level", "Stress"];
+const GPA_CANDS    = ["GPA", "gpa", "Gpa"];
+
+// Stress mapping (handles numeric or string labels)
+function stressToCat(v) {
+  const s = String(v).trim().toLowerCase();
+
+  // numeric?
+  const n = Number(s);
+  if (Number.isFinite(n)) {
+    // try to normalize to 1/2/3
+    if (n === 0) return 1;
+    if (n === 1) return 1;
+    if (n === 2) return 2;
+    if (n === 3) return 3;
+    return n;
+  }
+
+  // strings (include "moderate")
+  if (s === "low") return 1;
+  if (s === "medium" || s === "med" || s === "moderate") return 2;
+  if (s === "high") return 3;
+
+  return NaN;
+}
+function stressLabel(k){ return k===1 ? "Low" : (k===2 ? "Medium" : "High"); }
+
+/* =========================
+   UTIL
+========================= */
+function pickColumn(row, candidates) {
+  for (const c of candidates) {
+    if (row[c] != null && String(row[c]).trim() !== "") return c;
+  }
+  return null;
+}
+function toNumber(v) {
+  const n = Number(String(v).trim());
+  return Number.isFinite(n) ? n : NaN;
+}
+function shuffleInPlace(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/* =========================
+   STATE
+========================= */
+const svg = d3.select("#viz");
+const W = +svg.attr("width");
+const H = +svg.attr("height");
+const msg = document.getElementById("msg");
+const countsDiv = document.getElementById("counts");
+
+let fullData = [];
+let cols = null; // {sleepCol, stressCol, gpaCol}
+let mode = "scatter"; // or "parallel"
+
+/* =========================
+   LOAD DATA
+========================= */
+d3.csv(CSV_PATH).then(raw => {
+  if (!raw.length) throw new Error("CSV loaded but has 0 rows.");
+
+  const r0 = raw[0];
+  const sleepCol = pickColumn(r0, SLEEP_CANDS);
+  const stressCol = pickColumn(r0, STRESS_CANDS);
+  const gpaCol = pickColumn(r0, GPA_CANDS);
+
+  if (!sleepCol || !stressCol || !gpaCol) {
+    throw new Error(
+      "Could not find required columns. Found: " + Object.keys(r0).join(", ")
+    );
+  }
+  cols = { sleepCol, stressCol, gpaCol };
+
+  fullData = raw.map(d => ({
+    Sleep: toNumber(d[sleepCol]),
+    GPA: toNumber(d[gpaCol]),
+    Stress: stressToCat(d[stressCol])
+  })).filter(d =>
+    Number.isFinite(d.Sleep) && Number.isFinite(d.GPA) && Number.isFinite(d.Stress)
+  );
+
+  // show info
+  msg.textContent = `Loaded rows: ${fullData.length}. Columns: Sleep="${sleepCol}", Stress="${stressCol}", GPA="${gpaCol}"`;
+
+  const c = d3.rollup(fullData, v => v.length, d => d.Stress);
+  countsDiv.textContent = `Stress counts -> Low: ${c.get(1)||0}, Medium: ${c.get(2)||0}, High: ${c.get(3)||0}`;
+
+  render();
+}).catch(err => {
+  msg.style.color = "#b00";
+  msg.textContent = "Load failed: " + err.message;
+  console.error(err);
+});
+
+/* =========================
+   UI
+========================= */
+const btnScatter = document.getElementById("btnScatter");
+const btnParallel = document.getElementById("btnParallel");
+const sampleSel = document.getElementById("sample");
+
+btnScatter.onclick = () => { mode = "scatter"; btnScatter.classList.add("active"); btnParallel.classList.remove("active"); render(); };
+btnParallel.onclick = () => { mode = "parallel"; btnParallel.classList.add("active"); btnScatter.classList.remove("active"); render(); };
+sampleSel.onchange = () => render();
+
+/* =========================
+   RENDER
+========================= */
+function getSampledData() {
+  const val = sampleSel.value;
+  if (val === "all") return fullData.slice();
+
+  const n = Number(val);
+  const copy = fullData.slice();
+  shuffleInPlace(copy);
+  return copy.slice(0, Math.min(n, copy.length));
+}
+
+function clearSvg() {
+  svg.selectAll("*").remove();
+}
+
+function render() {
+  if (!fullData.length) return;
+  clearSvg();
+
+  const data = getSampledData();
+  const title = mode === "scatter"
+    ? "Scatter: Sleep (x) vs GPA (y), color = Stress"
+    : "Parallel Coordinates: Sleep / Stress / GPA (each row = one student)";
+  svg.append("text")
+    .attr("x", 18).attr("y", 34)
+    .attr("font-size", 26)
+    .attr("font-weight", 900)
+    .text(title);
+
+  svg.append("text")
+    .attr("x", 18).attr("y", 58)
+    .attr("font-size", 14)
+    .attr("fill", "#075")
+    .attr("font-weight", 700)
+    .text(`Using ${data.length} rows (change from dropdown).`);
+
+  if (mode === "scatter") drawScatter(data);
+  else drawParallel(data);
+}
+
+/* =========================
+   SCATTER PLOT
+   Sleep on x, GPA on y, Stress by color
+========================= */
+function drawScatter(data) {
+  const margin = { top: 90, right: 140, bottom: 70, left: 80 };
+  const iw = W - margin.left - margin.right;
+  const ih = H - margin.top - margin.bottom;
+
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const x = d3.scaleLinear()
+    .domain(d3.extent(data, d => d.Sleep)).nice()
+    .range([0, iw]);
+
+  const y = d3.scaleLinear()
+    .domain(d3.extent(data, d => d.GPA)).nice()
+    .range([ih, 0]);
+
+  // stress colors (3 categories)
+  const color = d3.scaleOrdinal()
+    .domain([1,2,3])
+    .range(["#cfe8ff", "#6baed6", "#08519c"]); // light->dark
+
+  g.append("g").attr("class","axis").attr("transform", `translate(0,${ih})`).call(d3.axisBottom(x));
+  g.append("g").attr("class","axis").call(d3.axisLeft(y));
+
+  g.append("text")
+    .attr("x", iw/2).attr("y", ih+52)
+    .attr("text-anchor","middle")
+    .attr("font-size", 18).attr("font-weight", 800)
+    .text("Sleep Hours Per Day");
+
+  g.append("text")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -ih/2).attr("y", -55)
+    .attr("text-anchor","middle")
+    .attr("font-size", 18).attr("font-weight", 800)
+    .text("GPA");
+
+  // dots
+  g.selectAll("circle.dot")
+    .data(data)
+    .enter()
+    .append("circle")
+    .attr("class","dot")
+    .attr("cx", d => x(d.Sleep))
+    .attr("cy", d => y(d.GPA))
+    .attr("r", 3.5)
+    .attr("fill", d => color(d.Stress))
+    .attr("opacity", 0.75);
+
+  // legend
+  const lg = svg.append("g").attr("transform", `translate(${W - margin.right + 20},${margin.top + 40})`);
+  lg.append("text").text("Stress").attr("font-weight", 900).attr("font-size", 18);
+
+  [1,2,3].forEach((k,i)=>{
+    lg.append("rect").attr("x",0).attr("y", 14 + i*26).attr("width", 14).attr("height", 14).attr("fill", color(k));
+    lg.append("text").attr("x", 22).attr("y", 26 + i*26).attr("font-size", 14).text(stressLabel(k));
+  });
+}
+
+/* =========================
+   PARALLEL COORDINATES
+   Axes: Sleep (numeric), Stress (ordinal), GPA (numeric)
+========================= */
+function drawParallel(data) {
+  const margin = { top: 90, right: 30, bottom: 50, left: 30 };
+  const iw = W - margin.left - margin.right;
+  const ih = H - margin.top - margin.bottom;
+
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  // Axis order (fixed, easy to explain)
+  const dims = ["Sleep", "Stress", "GPA"];
+
+  // x positions for each axis
+  const x = d3.scalePoint()
+    .domain(dims)
+    .range([0, iw])
+    .padding(0.5);
+
+  // y scales per dimension
+  const y = {};
+
+  y.Sleep = d3.scaleLinear()
+    .domain(d3.extent(data, d=>d.Sleep)).nice()
+    .range([ih, 0]);
+
+  y.GPA = d3.scaleLinear()
+    .domain(d3.extent(data, d=>d.GPA)).nice()
+    .range([ih, 0]);
+
+  // Stress is ordinal (Low/Medium/High)
+  const stressDomain = [1,2,3].filter(k => data.some(d=>d.Stress===k));
+  y.Stress = d3.scalePoint()
+    .domain(stressDomain)
+    .range([ih, 0])
+    .padding(0.5);
+
+  // color by stress (same as scatter)
+  const color = d3.scaleOrdinal()
+    .domain([1,2,3])
+    .range(["#cfe8ff", "#6baed6", "#08519c"]);
+
+  function path(d) {
+    return d3.line()(
+      dims.map(dim => {
+        const yy = (dim === "Stress") ? y.Stress(d.Stress) : y[dim](d[dim]);
+        return [x(dim), yy];
+      })
+    );
+  }
+
+  // lines
+  g.selectAll("path.pc-line")
+    .data(data)
+    .enter()
+    .append("path")
+    .attr("class","pc-line")
+    .attr("d", path)
+    .attr("stroke", d => color(d.Stress));
+
+  // axes
+  const axisG = g.selectAll("g.axisWrap")
+    .data(dims)
+    .enter()
+    .append("g")
+    .attr("class", "axisWrap")
+    .attr("transform", d => `translate(${x(d)},0)`);
+
+  axisG.each(function(dim){
+    const sel = d3.select(this);
+    if (dim === "Stress") {
+      sel.call(d3.axisLeft(y.Stress).tickFormat(stressLabel));
+    } else {
+      sel.call(d3.axisLeft(y[dim]));
+    }
+  });
+
+  // axis labels
+  axisG.append("text")
+    .attr("y", -12)
+    .attr("text-anchor","middle")
+    .attr("font-weight", 900)
+    .attr("font-size", 16)
+    .attr("fill", "#111")
+    .text(d => d);
+
+  // subtle vertical axis lines (makes it clearer)
+  axisG.append("line")
+    .attr("y1", 0).attr("y2", ih)
+    .attr("stroke", "#bbb")
+    .attr("stroke-width", 1);
+
+  // instruction hint
+  svg.append("text")
+    .attr("x", 18).attr("y", H-16)
+    .attr("font-size", 13)
+    .attr("fill", "#444")
+    .text("Tip: Hover a line to emphasize it (higher opacity + thicker).");
+}
+</script>
+</body>
+</html>
