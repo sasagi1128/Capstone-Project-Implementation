@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <script src="d3.js"></script>
+</head>
+<body>
+<h2>Scatter Plot: Sleep vs GPA (color = Stress)</h2>
+<div id="msg" style="font-family:system-ui;color:#070;margin:8px 0;"></div>
+<svg id="chart" width="900" height="520"></svg>
+
+<script>
+const svg = d3.select("#chart");
+const msg = document.getElementById("msg");
+
+const margin = {top: 20, right: 160, bottom: 45, left: 60};
+const W = +svg.attr("width");
+const H = +svg.attr("height");
+const width = W - margin.left - margin.right;
+const height = H - margin.top - margin.bottom;
+
+const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+function pickColumn(row, candidates) {
+  for (const c of candidates) if (row[c] != null && String(row[c]).trim() !== "") return c;
+  return null;
+}
+function toNumber(v){ const n = Number(String(v).trim()); return Number.isFinite(n) ? n : NaN; }
+function stressToNumber(v){
+  const s = String(v).trim().toLowerCase();
+  const n = Number(s); if (Number.isFinite(n)) return n;
+  if (s==="low") return 1;
+  if (s==="medium"||s==="med") return 2;
+  if (s==="high") return 3;
+  return NaN;
+}
+
+d3.csv("data/student_lifestyle_dataset.csv").then(raw => {
+  const r0 = raw[0];
+  const sleepCol = pickColumn(r0, ["Sleep_Hours_Per_Day","Sleep Hours Per Day","Sleep"]);
+  const stressCol = pickColumn(r0, ["Stress_Level","Stress Level","Stress"]);
+  const gpaCol   = pickColumn(r0, ["GPA","gpa","Gpa"]);
+
+  const data = raw.map(d => ({
+    Sleep: toNumber(d[sleepCol]),
+    GPA: toNumber(d[gpaCol]),
+    Stress: stressToNumber(d[stressCol])
+  })).filter(d => Number.isFinite(d.Sleep) && Number.isFinite(d.GPA) && Number.isFinite(d.Stress));
+
+  msg.textContent = `Loaded rows: ${data.length}. Columns: Sleep="${sleepCol}", GPA="${gpaCol}", Stress="${stressCol}"`;
+
+  const x = d3.scaleLinear().domain(d3.extent(data,d=>d.Sleep)).nice().range([0,width]);
+  const y = d3.scaleLinear().domain(d3.extent(data,d=>d.GPA)).nice().range([height,0]);
+
+  const color = d3.scaleOrdinal()
+    .domain([1,2,3])
+    .range(["#9ecae1","#6baed6","#2171b5"]); // Low -> High
+
+  g.append("g").attr("transform",`translate(0,${height})`).call(d3.axisBottom(x));
+  g.append("g").call(d3.axisLeft(y));
+
+  g.append("text").attr("x",width/2).attr("y",height+38)
+    .attr("text-anchor","middle").attr("font-family","system-ui").text("Sleep Hours Per Day");
+
+  g.append("text").attr("transform","rotate(-90)")
+    .attr("x",-height/2).attr("y",-45)
+    .attr("text-anchor","middle").attr("font-family","system-ui").text("GPA");
+
+  // points
+  const xJ = 0.05; // small jitter if sleep is discrete
+  g.selectAll("circle")
+    .data(data)
+    .enter()
+    .append("circle")
+    .attr("cx", d => x(d.Sleep + (Math.random()-0.5)*xJ))
+    .attr("cy", d => y(d.GPA))
+    .attr("r", 3.5)
+    .attr("opacity", 0.7)
+    .attr("fill", d => color(d.Stress));
+
+  // Legend (Stress)
+  const legend = svg.append("g")
+    .attr("transform", `translate(${margin.left + width + 20}, ${margin.top + 10})`)
+    .attr("font-family", "system-ui");
+
+  legend.append("text").text("Stress Level").attr("y", 0).attr("font-weight", "600");
+
+  const items = [
+    {k:1, label:"Low"},
+    {k:2, label:"Medium"},
+    {k:3, label:"High"}
+  ];
+
+  legend.selectAll("legendItem")
+    .data(items)
+    .enter()
+    .append("g")
+    .attr("transform", (d,i)=>`translate(0,${20 + i*22})`)
+    .each(function(d){
+      d3.select(this).append("rect").attr("width",14).attr("height",14).attr("fill", color(d.k));
+      d3.select(this).append("text").attr("x",20).attr("y",12).text(d.label);
+    });
+
+}).catch(err=>{
+  msg.style.color="#b00";
+  msg.textContent="CSV load failed: "+err;
+  console.error(err);
+});
+</script>
+</body>
+</html>
